@@ -1,0 +1,212 @@
+# Programming Machine Learning: Chapter 2
+
+```elixir
+Mix.install([
+  {:nx, "~> 0.5.0"},
+  {:kino, "~> 0.9.0"},
+  {:kino_vega_lite, "~> 0.1.8"}
+])
+```
+
+## Notes
+
+* The sections in this Livebook follow the respective sections in the book *Programming Machine Learning* for easier reference.
+
+## Getting to Know the Problem
+
+### Making Sense of the Data
+
+```elixir
+# The filepath
+filepath =
+  __DIR__
+  |> Path.join("pizza.txt")
+  |> Path.expand()
+
+# Parse the file into a usable format for Kino.DataTable
+data =
+  filepath
+  |> File.read!()
+  |> String.split("\n", trim: true)
+  # Remove the header
+  |> Enum.slice(1..-1)
+  |> Enum.map(&String.split(&1, ~r{\s+}, trim: true))
+  |> Enum.map(fn [r, p] -> %{reservations: String.to_integer(r), pizzas: String.to_integer(p)} end)
+
+# Put it into Kino.DataTable for reading.
+Kino.DataTable.new(data)
+```
+
+```elixir
+alias VegaLite, as: Vl
+
+Vl.new(width: 600, height: 400)
+|> Vl.data_from_values(data)
+|> Vl.encode_field(:x, "reservations", type: :quantitative)
+|> Vl.encode_field(:y, "pizzas", type: :quantitative)
+|> Vl.mark(:point, tooltip: true)
+```
+
+## Coding Linear Regression
+
+```elixir
+defmodule Model do
+  @doc """
+  Given a x value & weight, predicts the corresponding value of y.
+
+  ## Examples
+
+    iex> Model.predict(1, 2)
+    2
+
+    iex> Model.predict([1,2,3], 2)
+    [2,4,6]
+
+  """
+  def predict([], _), do: []
+
+  def predict([head | tail], weight) do
+    [predict(head, weight) | predict(tail, weight)]
+  end
+
+  def predict(x, weight), do: x * weight
+
+  @doc """
+  Given a x value, actual y value & weight, returns the mean squared error/loss vs actual.
+  """
+  def loss(x, y, weight) when is_list(x) and is_list(y) do
+    predict(x, weight)
+    |> Enum.zip_with(y, fn prediction, y -> prediction - y end)
+    |> square()
+    |> mean()
+  end
+
+  @doc """
+  Given x, y, iterations, learning rate, trains the model to find the weight that minimises the loss function.
+  """
+  def train(x, y, iterations, learning_rate) do
+    Enum.reduce(0..iterations, 0, fn i, weight ->
+      current_loss = loss(x, y, weight)
+      IO.puts("Iteration #{i} => Loss: #{current_loss}")
+
+      cond do
+        loss(x, y, weight + learning_rate) < current_loss ->
+          weight + learning_rate
+
+        loss(x, y, weight - learning_rate) < current_loss ->
+          weight - learning_rate
+
+        true ->
+          weight
+      end
+    end)
+  end
+
+  # =======
+  # Private
+  # =======
+
+  # Given a list, squares the values of the list
+  defp square(list) when is_list(list), do: Enum.map(list, &:math.pow(&1, 2))
+
+  # Given a list, calculates the mean of the list
+  defp mean(list) when is_list(list), do: Enum.sum(list) / length(list)
+end
+```
+
+```elixir
+# Extract the x and y values
+%{x: xs, y: ys} =
+  Enum.reduce(data, %{x: [], y: []}, fn item, %{x: x, y: y} ->
+    %{x: x ++ [item.reservations], y: y ++ [item.pizzas]}
+  end)
+
+# Get the weight
+w = Model.train(xs, ys, iterations = 10_000, lr = 0.01)
+```
+
+```elixir
+Model.predict(20, w)
+```
+
+## Adding a Bias
+
+```elixir
+defmodule ModelWithBias do
+  @doc """
+  Given a x value & weight, predicts the corresponding value of y.
+
+  ## Examples
+
+    iex> Model.predict(1, 2)
+    2
+
+    iex> Model.predict([1,2,3], 2)
+    [2,4,6]
+
+  """
+  def predict([head | tail], weight, bias) do
+    [predict(head, weight, bias) | predict(tail, weight, bias)]
+  end
+
+  def predict([], _, _), do: []
+
+  def predict(x, weight, bias), do: x * weight + bias
+
+  @doc """
+  Given a x value, actual y value & weight, returns the mean squared error/loss vs actual.
+  """
+  def loss(x, y, weight, bias) when is_list(x) and is_list(y) do
+    predict(x, weight, bias)
+    |> Enum.zip_with(y, fn prediction, y -> prediction - y end)
+    |> square()
+    |> mean()
+  end
+
+  @doc """
+  Given x, y, iterations, learning rate, trains the model to find the weight that minimises the loss function.
+  """
+  def train(x, y, iterations, learning_rate) do
+    Enum.reduce(0..iterations, {_weight = 0, _bias = 0}, fn i, {weight, bias} ->
+      current_loss = loss(x, y, weight, bias)
+      IO.puts("Iteration #{i} => Loss: #{current_loss}")
+
+      cond do
+        loss(x, y, weight + learning_rate, bias) < current_loss ->
+          {weight + learning_rate, bias}
+
+        loss(x, y, weight - learning_rate, bias) < current_loss ->
+          {weight - learning_rate, bias}
+
+        loss(x, y, weight, bias + learning_rate) < current_loss ->
+          {weight, bias + learning_rate}
+
+        loss(x, y, weight, bias - learning_rate) < current_loss ->
+          {weight, bias - learning_rate}
+
+        true ->
+          {weight, bias}
+      end
+    end)
+  end
+
+  # =======
+  # Private
+  # =======
+
+  # Given a list, squares the values of the list
+  defp square(list) when is_list(list), do: Enum.map(list, &:math.pow(&1, 2))
+
+  # Given a list, calculates the mean of the list
+  defp mean(list) when is_list(list), do: Enum.sum(list) / length(list)
+end
+```
+
+```elixir
+# Get the weight
+{weight, bias} = ModelWithBias.train(xs, ys, iterations = 10_000, lr = 0.01)
+```
+
+```elixir
+ModelWithBias.predict(20, weight, bias)
+```
